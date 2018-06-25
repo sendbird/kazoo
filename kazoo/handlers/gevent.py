@@ -28,6 +28,24 @@ _STOP = object()
 AsyncResult = gevent.event.AsyncResult
 
 
+def _to_fileno(obj):
+    if isinstance(obj, six.integer_types):
+        fd = int(obj)
+    elif hasattr(obj, "fileno"):
+        fd = obj.fileno()
+        if not isinstance(fd, six.integer_types):
+            raise TypeError("fileno() returned a non-integer")
+        fd = int(fd)
+    else:
+        raise TypeError("argument must be an int, or have a fileno() method.")
+
+    if fd < 0:
+        raise ValueError(
+            "file descriptor cannot be a negative integer (%d)" % (fd,)
+        )
+
+    return fd
+
 class SequentialGeventHandler(object):
     """Gevent handler for sequentially executing callbacks.
 
