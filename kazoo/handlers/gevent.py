@@ -17,6 +17,7 @@ except ImportError:
 from kazoo.handlers import utils
 from kazoo import python2atexit
 
+import six
 from collections import defaultdict
 
 _using_libevent = gevent.__version__.startswith('0.')
