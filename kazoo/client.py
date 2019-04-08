@@ -79,7 +79,6 @@ _RETRY_COMPAT_DEFAULTS = dict(
     max_retries=None,
     retry_delay=0.1,
     retry_backoff=2,
-    retry_jitter=0.8,
     retry_max_delay=3600,
 )
 
@@ -87,7 +86,6 @@ _RETRY_COMPAT_MAPPING = dict(
     max_retries='max_tries',
     retry_delay='delay',
     retry_backoff='backoff',
-    retry_jitter='max_jitter',
     retry_max_delay='max_delay',
 )
 
@@ -106,7 +104,9 @@ class KazooClient(object):
                  timeout=10.0, client_id=None, handler=None,
                  default_acl=None, auth_data=None, read_only=None,
                  randomize_hosts=True, connection_retry=None,
-                 command_retry=None, logger=None, **kwargs):
+                 command_retry=None, logger=None, keyfile=None,
+                 keyfile_password=None, certfile=None, ca=None,
+                 use_ssl=False, verify_certs=True, **kwargs):
         """Create a :class:`KazooClient` instance. All time arguments
         are in seconds.
 
@@ -135,6 +135,13 @@ class KazooClient(object):
             options which will be used for creating one.
         :param logger: A custom logger to use instead of the module
             global `log` instance.
+        :param keyfile: SSL keyfile to use for authentication
+        :param keyfile_password: SSL keyfile password
+        :param certfile: SSL certfile to use for authentication
+        :param ca: SSL CA file to use for authentication
+        :param use_ssl: argument to control whether SSL is used or not
+        :param verify_certs: when using SSL, argument to bypass
+            certs verification
 
         Basic Example:
 
@@ -183,6 +190,12 @@ class KazooClient(object):
         self.chroot = None
         self.set_hosts(hosts)
 
+        self.use_ssl = use_ssl
+        self.verify_certs = verify_certs
+        self.certfile = certfile
+        self.keyfile = keyfile
+        self.keyfile_password = keyfile_password
+        self.ca = ca
         # Curator like simplified state tracking, and listeners for
         # state transitions
         self._state = KeeperState.CLOSED
@@ -289,6 +302,15 @@ class KazooClient(object):
         self.SetPartitioner = partial(SetPartitioner, self)
         self.Semaphore = partial(Semaphore, self)
         self.ShallowParty = partial(ShallowParty, self)
+
+        # Managing SASL client
+        self.use_sasl = False
+        for scheme, auth in self.auth_data:
+            if scheme == "sasl":
+                self.use_sasl = True
+                # Could be used later for GSSAPI implementation
+                self.sasl_server_principal = "zk-sasl-md5"
+                break
 
         # If we got any unhandled keywords, complain like Python would
         if kwargs:
@@ -648,7 +670,14 @@ class KazooClient(object):
 
         peer = self._connection._socket.getpeername()[:2]
         sock = self.handler.create_connection(
-            peer, timeout=self._session_timeout / 1000.0)
+            peer, timeout=self._session_timeout / 1000.0,
+            use_ssl=self.use_ssl,
+            ca=self.ca,
+            certfile=self.certfile,
+            keyfile=self.keyfile,
+            keyfile_password=self.keyfile_password,
+            verify_certs=self.verify_certs,
+        )
         sock.sendall(cmd)
         result = sock.recv(8192)
         sock.close()
@@ -708,8 +737,12 @@ class KazooClient(object):
         """Send credentials to server.
 
         :param scheme: authentication scheme (default supported:
-                       "digest").
+                       "digest", "sasl"). Note that "sasl" scheme is
+                       requiring "pure-sasl" library to be
+                       installed.
         :param credential: the credential -- value depends on scheme.
+                           "digest": user:password
+                           "sasl": user:password
 
         :returns: True if it was successful.
         :rtype: bool
@@ -1191,7 +1224,7 @@ class KazooClient(object):
             raise TypeError("Invalid type for 'path' (string expected)")
         if isinstance(acls, ACL) or not isinstance(acls, (tuple, list)):
             raise TypeError("Invalid type for 'acl' (acl must be a tuple/list"
-                            " of ACL's")
+                            " of ACL's)")
         if not isinstance(version, int):
             raise TypeError("Invalid type for 'version' (int expected)")
 

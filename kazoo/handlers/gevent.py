@@ -80,6 +80,10 @@ class SequentialGeventHandler(object):
         self._state_change = Semaphore()
         self._workers = []
 
+    @property
+    def running(self):
+        return self._running
+
     class timeout_exception(gevent.Timeout):
         def __init__(self, msg):
             gevent.Timeout.__init__(self, exception=msg)
@@ -89,14 +93,17 @@ class SequentialGeventHandler(object):
             while True:
                 try:
                     func = queue.get()
-                    if func is _STOP:
-                        break
-                    func()
+                    try:
+                        if func is _STOP:
+                            break
+                        func()
+                    except Exception as exc:
+                        log.warning("Exception in worker greenlet")
+                        log.exception(exc)
+                    finally:
+                        del func  # release before possible idle
                 except self.queue_empty:
                     continue
-                except Exception as exc:
-                    log.warning("Exception in worker greenlet")
-                    log.exception(exc)
         return gevent.spawn(greenlet_worker)
 
     def start(self):

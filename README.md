@@ -1,11 +1,9 @@
 Kazoo
 =====
 
-![Travis Build](https://travis-ci.org/python-zk/kazoo.svg?branch=master)
-
-![Latest Version](https://img.shields.io/pypi/v/kazoo.svg)
-
-![Downloads](https://img.shields.io/pypi/dm/kazoo.svg)
+[![Build Status](https://travis-ci.org/python-zk/kazoo.svg?branch=master)](https://travis-ci.org/python-zk/kazoo)
+[![Latest Version](https://img.shields.io/pypi/v/kazoo.svg)](https://pypi.org/project/kazoo/)
+[![Reviewed by Hound](https://img.shields.io/badge/Reviewed_by-Hound-8E64B0.svg)](https://houndci.com)
 
 `kazoo` implements a higher level API to [Apache
 Zookeeper](http://zookeeper.apache.org/) for Python clients.
