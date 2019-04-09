@@ -3,6 +3,8 @@
 import errno
 import functools
 import select
+import ssl
+import socket
 import time
 
 HAS_FNCTL = True
@@ -44,20 +46,14 @@ class AsyncResult(object):
         with self._condition:
             self.value = value
             self._exception = None
-            for callback in self._callbacks:
-                self._handler.completion_queue.put(
-                    functools.partial(callback, self)
-                )
+            self._do_callbacks()
             self._condition.notify_all()
 
     def set_exception(self, exception):
         """Store the exception. Wake up the waiters."""
         with self._condition:
             self._exception = exception
-            for callback in self._callbacks:
-                self._handler.completion_queue.put(
-                    functools.partial(callback, self)
-                )
+            self._do_callbacks()
             self._condition.notify_all()
 
     def get(self, block=True, timeout=None):
@@ -100,15 +96,12 @@ class AsyncResult(object):
         """Register a callback to call when a value or an exception is
         set"""
         with self._condition:
-            # Are we already set? Dispatch it now
-            if self.ready():
-                self._handler.completion_queue.put(
-                    functools.partial(callback, self)
-                )
-                return
-
             if callback not in self._callbacks:
                 self._callbacks.append(callback)
+
+            # Are we already set? Dispatch it now
+            if self.ready():
+                self._do_callbacks()
 
     def unlink(self, callback):
         """Remove the callback set by :meth:`rawlink`"""
@@ -120,6 +113,18 @@ class AsyncResult(object):
             if callback in self._callbacks:
                 self._callbacks.remove(callback)
 
+    def _do_callbacks(self):
+        """Execute the callbacks that were registered by :meth:`rawlink`.
+        If the handler is in running state this method only schedules
+        the calls to be performed by the handler. If it's stopped,
+        the callbacks are called right away."""
+
+        for callback in self._callbacks:
+            if self._handler.running:
+                self._handler.completion_queue.put(
+                    functools.partial(callback, self))
+            else:
+                functools.partial(callback, self)()
 
 def _set_fd_cloexec(fd):
     flags = fcntl.fcntl(fd, fcntl.F_GETFD)
@@ -183,7 +188,10 @@ def create_tcp_socket(module):
     return sock
 
 
-def create_tcp_connection(module, address, timeout=None):
+def create_tcp_connection(module, address, timeout=None,
+                          use_ssl=False, ca=None, certfile=None,
+                          keyfile=None, keyfile_password=None,
+                          verify_certs=True):
     end = None
     if timeout is None:
         # thanks to create_connection() developers for
@@ -193,18 +201,54 @@ def create_tcp_connection(module, address, timeout=None):
         end = time.time() + timeout
     sock = None
 
-    while end is None or time.time() < end:
-        try:
-            # if we got a timeout, lets ensure that we decrement the time
-            # otherwise there is no timeout set and we'll call it as such
-            timeout_at = end if end is None else end - time.time()
-            sock = module.create_connection(address, timeout_at)
+    while True:
+        timeout_at = end if end is None else end - time.time()
+        # The condition is not '< 0' here because socket.settimeout treats 0 as
+        # a special case to put the socket in non-blocking mode.
+        if timeout_at is not None and timeout_at <= 0:
             break
-        except Exception as ex:
-            errnum = ex.errno if isinstance(ex, OSError) else ex[0]
-            if errnum == errno.EINTR:
-                continue
-            raise
+
+        if use_ssl:
+            # Disallow use of SSLv2 and V3 (meaning we require TLSv1.0+)
+            context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+            context.options |= ssl.OP_NO_SSLv2
+            context.options |= ssl.OP_NO_SSLv3
+            # Load default CA certs
+            context.load_default_certs(ssl.Purpose.SERVER_AUTH)
+            context.verify_mode = (
+                ssl.CERT_OPTIONAL if verify_certs else ssl.CERT_NONE
+            )
+            if ca:
+                context.load_verify_locations(ca)
+            if certfile and keyfile:
+                context.verify_mode = (
+                    ssl.CERT_REQUIRED if verify_certs else ssl.CERT_NONE
+                )
+                context.load_cert_chain(certfile=certfile,
+                                        keyfile=keyfile,
+                                        password=keyfile_password)
+            try:
+                # Query the address to get back it's address family
+                addrs = socket.getaddrinfo(address[0], address[1], 0,
+                                           socket.SOCK_STREAM)
+                conn = context.wrap_socket(module.socket(addrs[0][0]))
+                conn.settimeout(timeout_at)
+                conn.connect(address)
+                sock = conn
+                break
+            except ssl.SSLError:
+                raise
+        else:
+            try:
+                # if we got a timeout, lets ensure that we decrement the time
+                # otherwise there is no timeout set and we'll call it as such
+                sock = module.create_connection(address, timeout_at)
+                break
+            except Exception as ex:
+                errnum = ex.errno if isinstance(ex, OSError) else ex[0]
+                if errnum == errno.EINTR:
+                    continue
+                raise
 
     if sock is None:
         raise module.error

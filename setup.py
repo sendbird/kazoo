@@ -24,6 +24,8 @@ tests_require = install_requires + [
     'mock',
     'nose',
     'flake8',
+    'pure-sasl',
+    'objgraph',
 ]
 
 if not (PYTHON3 or PYPY):
@@ -76,4 +78,5 @@ setup(
     extras_require={
         'test': tests_require,
     },
+    long_description_content_type="text/markdown",
 )
