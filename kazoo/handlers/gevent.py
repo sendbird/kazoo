@@ -19,6 +19,7 @@ from kazoo import python2atexit
 
 import six
 from collections import defaultdict
+from itertools import chain
 
 _using_libevent = gevent.__version__.startswith('0.')
 
@@ -142,18 +143,20 @@ class SequentialGeventHandler(object):
             python2atexit.unregister(self.stop)
 
     def select(self, *args, **kwargs):
-        try:
-            return self._poll_select(*args, **kwargs)
-        except AttributeError:
-            return gevent.select.select(*args, **kwargs)
+        # if the highest fd we've seen is > 1023, use a poll-based "select".
+        if max(map(_to_fileno, chain(*args[:3]))) > 1023:
+             return self._poll_select(*args, **kwargs)
+        return self._select(*args, **kwargs)
+
+    def _select(self, *args, **kwargs):
+        return gevent.select.select(*args, **kwargs)
 
     def _poll_select(self, rlist, wlist, xlist, timeout=None):
         """poll-based drop-in replacement for select to overcome select
         limitation on a maximum filehandle value
         """
-
-        if timeout is None:
-            timeout = -1
+        if timeout is not None and timeout > 0:
+            timeout *= 1000
         eventmasks = defaultdict(int)
         rfd2obj = defaultdict(list)
         wfd2obj = defaultdict(list)
@@ -187,7 +190,8 @@ class SequentialGeventHandler(object):
                 if event & gevent.select.POLLNVAL:
                     xevents += xfd2obj.get(fileno, [])
         finally:
-            poller.close()
+            for fileno in eventmasks:
+                poller.unregister(fileno)
 
         return revents, wevents, xevents
 
