@@ -143,10 +143,7 @@ class SequentialGeventHandler(object):
             python2atexit.unregister(self.stop)
 
     def select(self, *args, **kwargs):
-        # if the highest fd we've seen is > 1023, use a poll-based "select".
-        if max(map(_to_fileno, chain(*args[:3]))) > 1023:
-             return self._poll_select(*args, **kwargs)
-        return self._select(*args, **kwargs)
+        return self._poll_select(*args, **kwargs)
 
     def _select(self, *args, **kwargs):
         return gevent.select.select(*args, **kwargs)
